@@ -1,3 +1,12 @@
+
+</div>
+
+<div align="center">
+
+![:name](https://count.getloli.com/@InitiativeDialogue?name=InitiativeDialogue&theme=minecraft&padding=7&offset=0&align=top&scale=1&pixelated=1&darkmode=auto)
+
+</div>
+
 # 伪造转发消息插件
 
 一个用于AstrBot的插件，可以创建包含多个用户发言的伪造转发消息，支持自动获取QQ昵称。
