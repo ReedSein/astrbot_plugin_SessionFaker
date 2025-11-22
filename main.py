@@ -5,7 +5,7 @@ import asyncio
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.message_components import Node, Plain, Nodes, Image as CompImage, Image
 
-@register("SessionFaker", "Jason.Joestar", "一个伪造转发消息的插件", "1.2.1", "https://github.com/advent259141/astrbot_plugin_SessionFaker")
+@register("SessionFaker", "ReedSein", "一个伪造转发消息的插件", "1.2.0", "https://github.com/ReedSein/astrbot_plugin_SessionFaker")
 class SessionFakerPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
@@ -187,3 +187,4 @@ class SessionFakerPlugin(Star):
         logger.debug("伪造消息插件正在停止，清理资源...")
         if self._session and not self._session.closed:
             await self._session.close()
+
