@@ -1,6 +1,6 @@
 name: astrbot_plugin_RosaSessionFaker
 desc: 一个用于创建包含多个用户发言的伪造转发消息，支持自动获取QQ昵称的插件。
 help: 使用 /伪造消息 查看帮助。
-version: v1.2.2
+version: v1.2.3
 author: Jason.Joestar & ReedSein
 repo: https://github.com/ReedSein/astrbot_plugin_SessionFaker
