@@ -5,39 +5,33 @@ import asyncio
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.message_components import Node, Plain, Nodes, Image as CompImage, Image
 
-@register("SessionFaker", "ReedSein", "一个伪造转发消息的插件", "1.2.0", "https://github.com/ReedSein/astrbot_plugin_SessionFaker")
+@register("RosaSessionFaker", "ReedSein", "一个伪造转发消息的插件", "1.2.2", "https://github.com/ReedSein/astrbot_plugin_SessionFaker")
 class SessionFakerPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        self.nickname_cache = {} # 内存缓存：{qq: nickname}，重启后自动清空
-        self._session = None # 复用 HTTP Session
-        logger.debug("伪造转发消息插件(修复版 v1.2.1)已初始化")
+        self.nickname_cache = {} # 内存缓存
+        self._session = None
+        logger.debug("伪造转发消息插件(v1.2.2 修复版)已初始化")
 
     async def _get_session(self):
-        """懒加载获取 session"""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
         return self._session
 
     async def get_qq_nickname(self, qq_number: str) -> str:
-        """获取QQ昵称 (带内存缓存 + 复用Session)"""
-        # 1. 查缓存 (O(1) 复杂度)
         if qq_number in self.nickname_cache:
             return self.nickname_cache[qq_number]
 
         url = f"http://api.mmp.cc/api/qqname?qq={qq_number}"
         try:
             session = await self._get_session()
-            # 设置超时，防止 API 挂起导致整个流程卡住
-            async with session.get(url, timeout=5) as response: 
+            async with session.get(url, timeout=5) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get("code") == 200 and data.get("data", {}).get("name"):
                         nickname = data["data"]["name"]
                         if nickname:
-                            # 2. 写入缓存
                             self.nickname_cache[qq_number] = nickname
-                            logger.debug(f"已缓存昵称: {qq_number} -> {nickname}")
                             return nickname
         except Exception as e:
             logger.warning(f"获取QQ {qq_number} 昵称失败: {str(e)}")
@@ -45,55 +39,52 @@ class SessionFakerPlugin(Star):
         return f"用户{qq_number}"
 
     async def parse_message_components(self, message_obj):
-        """解析消息组件，分离文本和图片"""
+        """解析消息组件"""
         segments = []
         current_segment = {"text": "", "images": []}
         
-        # --- 修复点开始 ---
-        # 获取消息组件列表。AstrBotMessage.message 才是 List[BaseMessageComponent]
+        # 1. 获取原始消息链列表 (修复 'not iterable' 错误)
         if hasattr(message_obj, "message") and isinstance(message_obj.message, list):
-            original_chain = message_obj.message
+            chain = message_obj.message
+        elif isinstance(message_obj, list):
+            chain = message_obj
         else:
-            # 防御性编程：如果传入的已经是 list，直接使用
-            original_chain = message_obj if isinstance(message_obj, list) else []
-        # --- 修复点结束 ---
+            chain = []
 
-        # 尝试重构消息链逻辑
-        # 如果第一个节点是纯文本且包含命令，去掉它
-        iterator = iter(original_chain)
-        first_node = next(iterator, None)
-        
+        # 2. 预处理：移除指令前缀 "伪造消息"
+        # 我们构建一个新的临时链来处理，避免修改原始对象
         processed_chain = []
-        if first_node:
-            if isinstance(first_node, Plain):
-                text = first_node.text
-                # 移除可能的指令前缀
+        first_processed = False
+        
+        for comp in chain:
+            if not first_processed and isinstance(comp, Plain):
+                # 只在第一个文本节点处理前缀
+                text = comp.text
                 if "伪造消息" in text:
+                    # 替换一次，并去除首尾空格
                     text = text.replace("伪造消息", "", 1).lstrip()
                 processed_chain.append(Plain(text))
+                first_processed = True
             else:
-                processed_chain.append(first_node)
-            
-            # 添加剩余节点
-            for node in iterator:
-                processed_chain.append(node)
+                processed_chain.append(comp)
 
-        # 开始解析
+        # 3. 开始分段解析
         for comp in processed_chain:
             if isinstance(comp, Plain):
+                # 使用 | 分割
                 parts = comp.text.split("|")
                 current_segment["text"] += parts[0]
                 
                 if len(parts) > 1:
-                    # 当前段落结束，保存
+                    # 保存当前段落
                     if current_segment["text"].strip() or current_segment["images"]:
                         segments.append(current_segment)
                     
-                    # 中间的段落（纯文本）
+                    # 处理中间的段落（纯文本）
                     for i in range(1, len(parts) - 1):
                         segments.append({"text": parts[i], "images": []})
                     
-                    # 开启新段落
+                    # 开始新段落
                     current_segment = {"text": parts[-1], "images": []}
             
             elif isinstance(comp, Image) and hasattr(comp, 'url') and comp.url:
@@ -108,54 +99,52 @@ class SessionFakerPlugin(Star):
     @filter.command("伪造消息")
     async def fake_message(self, event: AstrMessageEvent):
         '''创建伪造转发消息。
-        
         格式: 伪造消息 QQ(昵称) 内容 | QQ 内容
-        示例: 伪造消息 123456(张三) 你好 | 654321 我也好
         '''
-        
         segments = await self.parse_message_components(event.message_obj)
         if not segments:
-            yield event.plain_result('未能解析出任何消息内容。请检查格式。')
+            yield event.plain_result('未能解析出任何消息内容。')
             return
 
-        # --- 阶段 1: 预处理与任务分发 ---
         processed_segments = []
 
+        # --- 解析阶段 ---
         for segment in segments:
             text = segment["text"].strip()
             if not text: continue
 
-            # 解析 QQ、昵称、内容
+            # 正则匹配：QQ号 (可选昵称) 内容
             match = re.match(r'^\s*(\d+)(?:\s*\(([^)]*)\))?\s+(.*)', text, re.DOTALL)
-            if not match: continue
+            if not match: 
+                logger.warning(f"忽略无法解析的段落: {text[:20]}...")
+                continue
 
             qq_number = match.group(1)
             custom_nickname = match.group(2)
             content = match.group(3).strip()
-            images = segment["images"]
+            
+            # 调试日志：确认提取到的 QQ 号
+            logger.debug(f"解析成功 -> QQ: {qq_number}, 昵称: {custom_nickname}, 内容: {content[:10]}...")
 
-            seg_data = {
+            processed_segments.append({
                 "qq": qq_number,
                 "custom_nick": custom_nickname,
                 "content": content,
-                "images": images
-            }
-            processed_segments.append(seg_data)
+                "images": segment["images"]
+            })
 
-        # --- 阶段 2: 并发网络请求 ---
-        # 找出所有需要获取昵称的 QQ 号
-        unique_qqs_to_fetch = list(set([s["qq"] for s in processed_segments if not s["custom_nick"]]))
-        
-        if unique_qqs_to_fetch:
-            logger.debug(f"开始并发获取 {len(unique_qqs_to_fetch)} 个用户的昵称...")
-            # 并发执行所有网络请求，结果会自动写入 self.nickname_cache
-            await asyncio.gather(*[self.get_qq_nickname(qq) for qq in unique_qqs_to_fetch])
-        
-        # --- 阶段 3: 组装消息链 ---
+        if not processed_segments:
+            yield event.plain_result('格式错误：未找到有效的 [QQ号 内容] 格式。请检查是否忘记加空格。')
+            return
+
+        # --- 并发获取昵称 ---
+        unique_qqs = list(set([s["qq"] for s in processed_segments if not s["custom_nick"]]))
+        if unique_qqs:
+            await asyncio.gather(*[self.get_qq_nickname(qq) for qq in unique_qqs])
+
+        # --- 构建节点 ---
         nodes_list = []
-
         for seg in processed_segments:
-            # 确定最终昵称：优先用自定义的，否则从缓存取
             nickname = seg["custom_nick"]
             if not nickname:
                 nickname = self.nickname_cache.get(seg["qq"], f"用户{seg['qq']}")
@@ -167,12 +156,15 @@ class SessionFakerPlugin(Star):
             for img_url in seg["images"]:
                 try:
                     node_content.append(CompImage.fromURL(img_url))
-                except Exception as e:
-                    logger.warning(f"图片加载失败: {e}")
+                except:
+                    pass
             
             if node_content:
+                # 关键点：确保 uin 是整数。
+                # 如果这里解析正确，但依然显示 Bot 头像，说明是底层协议端(OneBot)的问题，而不是插件的问题。
+                target_uin = int(seg["qq"])
                 nodes_list.append(Node(
-                    uin=int(seg["qq"]),
+                    uin=target_uin,
                     name=nickname,
                     content=node_content
                 ))
@@ -180,11 +172,8 @@ class SessionFakerPlugin(Star):
         if nodes_list:
             yield event.chain_result([Nodes(nodes=nodes_list)])
         else:
-            yield event.plain_result("解析失败，未生成有效节点。")
+            yield event.plain_result("生成失败，无有效节点。")
 
     async def terminate(self):
-        '''插件卸载时关闭 HTTP Session'''
-        logger.debug("伪造消息插件正在停止，清理资源...")
         if self._session and not self._session.closed:
             await self._session.close()
-
