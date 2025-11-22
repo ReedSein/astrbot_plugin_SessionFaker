@@ -5,13 +5,13 @@ import asyncio
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.message_components import Node, Plain, Nodes, Image as CompImage, Image
 
-@register("SessionFaker", "ReedSein", "一个伪造转发消息的插件", "1.2.0", "https://github.com/ReedSein/astrbot_plugin_SessionFaker")
+@register("SessionFaker", "Jason.Joestar", "一个伪造转发消息的插件", "1.2.1", "https://github.com/advent259141/astrbot_plugin_SessionFaker")
 class SessionFakerPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
         self.nickname_cache = {} # 内存缓存：{qq: nickname}，重启后自动清空
         self._session = None # 复用 HTTP Session
-        logger.debug("伪造转发消息插件(优化版 v1.2.0)已初始化")
+        logger.debug("伪造转发消息插件(修复版 v1.2.1)已初始化")
 
     async def _get_session(self):
         """懒加载获取 session"""
@@ -49,25 +49,26 @@ class SessionFakerPlugin(Star):
         segments = []
         current_segment = {"text": "", "images": []}
         
-        # 获取纯文本部分用于分割，移除指令前缀避免干扰
-        # 注意：AstrBot 的 command 过滤器可能已经处理了部分前缀，这里做防御性编程
-        raw_str = message_obj.message_str
-        if raw_str.startswith("伪造消息"):
-            raw_str = raw_str.replace("伪造消息", "", 1)
-            
+        # --- 修复点开始 ---
+        # 获取消息组件列表。AstrBotMessage.message 才是 List[BaseMessageComponent]
+        if hasattr(message_obj, "message") and isinstance(message_obj.message, list):
+            original_chain = message_obj.message
+        else:
+            # 防御性编程：如果传入的已经是 list，直接使用
+            original_chain = message_obj if isinstance(message_obj, list) else []
+        # --- 修复点结束 ---
+
         # 尝试重构消息链逻辑
-        # 这里沿用你原始的逻辑思路，但在处理 command 时稍微调整
-        
-        # 为了兼容性，我们直接遍历 message_obj
         # 如果第一个节点是纯文本且包含命令，去掉它
-        iterator = iter(message_obj)
+        iterator = iter(original_chain)
         first_node = next(iterator, None)
         
         processed_chain = []
         if first_node:
             if isinstance(first_node, Plain):
                 text = first_node.text
-                if text.strip().startswith("伪造消息"):
+                # 移除可能的指令前缀
+                if "伪造消息" in text:
                     text = text.replace("伪造消息", "", 1).lstrip()
                 processed_chain.append(Plain(text))
             else:
@@ -118,7 +119,6 @@ class SessionFakerPlugin(Star):
             return
 
         # --- 阶段 1: 预处理与任务分发 ---
-        tasks = []
         processed_segments = []
 
         for segment in segments:
@@ -142,27 +142,20 @@ class SessionFakerPlugin(Star):
             }
             processed_segments.append(seg_data)
 
-            # 如果没有自定义昵称，且不在缓存中，则需要请求
-            if not custom_nickname:
-                # get_qq_nickname 内部会处理缓存检查，这里直接调用即可
-                # 但为了 asyncio.gather 的效率，我们收集所有非自定义昵称的 task
-                pass
-
         # --- 阶段 2: 并发网络请求 ---
-        # 找出所有需要获取昵称的 QQ 号 (去重可以进一步优化，但在缓存层做也行)
+        # 找出所有需要获取昵称的 QQ 号
         unique_qqs_to_fetch = list(set([s["qq"] for s in processed_segments if not s["custom_nick"]]))
         
         if unique_qqs_to_fetch:
             logger.debug(f"开始并发获取 {len(unique_qqs_to_fetch)} 个用户的昵称...")
-            # 这里会并发执行所有网络请求，等待所有结果返回
-            # 结果会自动写入 self.nickname_cache
+            # 并发执行所有网络请求，结果会自动写入 self.nickname_cache
             await asyncio.gather(*[self.get_qq_nickname(qq) for qq in unique_qqs_to_fetch])
         
         # --- 阶段 3: 组装消息链 ---
         nodes_list = []
 
         for seg in processed_segments:
-            # 确定最终昵称：优先用自定义的，否则从缓存取（刚才的并发请求已经保证缓存里有了）
+            # 确定最终昵称：优先用自定义的，否则从缓存取
             nickname = seg["custom_nick"]
             if not nickname:
                 nickname = self.nickname_cache.get(seg["qq"], f"用户{seg['qq']}")
